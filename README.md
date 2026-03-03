@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/glpi-project/glpi/main/pics/logos/glpi-logo.png" width="280" alt="GLPI Logo"/>
+<img src="./banner.png" width="860" alt="GLPI 11 Auto Update Script Banner"/>
 
 # 🚀 GLPI 11 — Auto Update Script
 
