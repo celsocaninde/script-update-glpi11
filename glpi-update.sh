@@ -248,6 +248,17 @@ log_info "Limpando cache do GLPI..."
 php "${GLPI_DIR}/bin/console" cache:clear --no-interaction 2>/dev/null || true
 log_ok "Cache limpo."
 
+# ─── Aquecimento do cache (warm-up via Redis) ─────────────────────────────────
+log_info "Aquecendo cache no Redis (cache warm-up)..."
+
+# Reconfigura o driver de cache (garante que o Redis seja usado)
+php "${GLPI_DIR}/bin/console" cache:configure --no-interaction 2>/dev/null || true
+
+# Dispara o carregamento das principais rotinas PHP para popular o Redis
+php "${GLPI_DIR}/bin/console" glpi:system:check_requirements --no-interaction 2>/dev/null || true
+
+log_ok "Cache aquecido com sucesso."
+
 # ─── Desativar modo de manutenção ─────────────────────────────────────────────
 log_info "Desativando modo de manutenção..."
 php "${GLPI_DIR}/bin/console" glpi:maintenance:disable 2>/dev/null || true
