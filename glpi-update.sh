@@ -10,6 +10,10 @@
 
 set -euo pipefail
 
+# ─── Configuração de Log ──────────────────────────────────────────────────────
+LOG_FILE="/var/log/glpi-update-$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -i "$LOG_FILE") 2>&1
+
 # ─── Cores ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -49,7 +53,7 @@ check_root() {
 
 check_dependencies() {
     log_info "Verificando dependências..."
-    local deps=("curl" "tar" "php" "rsync")
+    local deps=("curl" "tar" "php" "rsync" "mysqldump")
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
             log_error "Dependência não encontrada: $dep. Instale e tente novamente."
@@ -130,15 +134,35 @@ fetch_latest_version
 check_glpi_dir
 
 # ─── PASSO 1: Colocar GLPI em modo de manutenção ──────────────────────────────
-log_info "Passo 1/7 - Ativando modo de manutenção do GLPI..."
+log_info "Passo 1/8 - Ativando modo de manutenção do GLPI..."
 if php "${GLPI_DIR}/bin/console" glpi:maintenance:enable 2>/dev/null; then
     log_ok "Modo de manutenção ativado."
 else
     log_warn "Não foi possível ativar o modo de manutenção (ignorando)."
 fi
 
-# ─── PASSO 2: Renomear pasta glpi para glpi-old ───────────────────────────────
-log_info "Passo 2/7 - Renomeando '${GLPI_DIR}' para '${GLPI_OLD_DIR}'..."
+# ─── PASSO 2: Backup do Banco de Dados ────────────────────────────────────────
+log_info "Passo 2/8 - Realizando backup do banco de dados..."
+if [[ -f "${GLPI_DIR}/config/config_db.php" ]]; then
+    DB_USER=$(grep "public \$dbuser" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
+    DB_PASS=$(grep "public \$dbpassword" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
+    DB_NAME=$(grep "public \$dbdefault" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
+    DB_HOST=$(grep "public \$dbhost" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
+    
+    BACKUP_FILE="/root/glpi-db-backup-$(date +%Y%m%d_%H%M%S).sql"
+    # O 2>/dev/null previne que avisos sobre senha na linha de comando poluam o log
+    if mysqldump -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" > "$BACKUP_FILE" 2>/dev/null; then
+        log_ok "Backup do banco salvo em: $BACKUP_FILE"
+    else
+        log_error "Falha ao realizar o backup do banco de dados!"
+        exit 1
+    fi
+else
+    log_warn "Arquivo de configuração do banco não encontrado. Pulando backup do DB."
+fi
+
+# ─── PASSO 3: Renomear pasta glpi para glpi-old ───────────────────────────────
+log_info "Passo 3/8 - Renomeando '${GLPI_DIR}' para '${GLPI_OLD_DIR}'..."
 
 if [[ -d "$GLPI_OLD_DIR" ]]; then
     log_warn "Diretório '${GLPI_OLD_DIR}' já existe. Removendo backup antigo..."
@@ -148,8 +172,8 @@ fi
 mv "$GLPI_DIR" "$GLPI_OLD_DIR"
 log_ok "Renomeado com sucesso."
 
-# ─── PASSO 3: Baixar nova versão do GLPI ──────────────────────────────────────
-log_info "Passo 3/7 - Baixando nova versão do GLPI..."
+# ─── PASSO 4: Baixar nova versão do GLPI ──────────────────────────────────────
+log_info "Passo 4/8 - Baixando nova versão do GLPI..."
 mkdir -p "$TMP_DIR"
 
 TGZ_FILE="${TMP_DIR}/glpi-new.tgz"
@@ -164,8 +188,8 @@ fi
 
 log_ok "Download concluído: ${TGZ_FILE}"
 
-# ─── PASSO 4: Descompactar no diretório web ───────────────────────────────────
-log_info "Passo 4/7 - Descompactando GLPI em '${WEB_ROOT}'..."
+# ─── PASSO 5: Descompactar no diretório web ───────────────────────────────────
+log_info "Passo 5/8 - Descompactando GLPI em '${WEB_ROOT}'..."
 tar -xzf "$TGZ_FILE" -C "$WEB_ROOT"
 
 # O tarball do GLPI extrai para uma pasta chamada 'glpi'
@@ -177,8 +201,8 @@ fi
 
 log_ok "Descompactado em: ${GLPI_DIR}"
 
-# ─── PASSO 5: Copiar pastas preservadas do glpi-old ──────────────────────────
-log_info "Passo 5/7 - Copiando pastas preservadas de '${GLPI_OLD_DIR}'..."
+# ─── PASSO 6: Copiar pastas preservadas do glpi-old ──────────────────────────
+log_info "Passo 6/8 - Copiando pastas preservadas de '${GLPI_OLD_DIR}'..."
 
 for dir in "${PRESERVE_DIRS[@]}"; do
     SRC="${GLPI_OLD_DIR}/${dir}"
@@ -186,16 +210,16 @@ for dir in "${PRESERVE_DIRS[@]}"; do
 
     if [[ -d "$SRC" ]]; then
         log_info "  Copiando: ${dir}/"
-        # rsync preserva permissões e sobrescreve arquivos existentes
-        rsync -a --delete "$SRC/" "$DST/"
+        # rsync preserva permissões, mostra progresso e sobrescreve arquivos existentes
+        rsync -a --info=progress2 --delete "$SRC/" "$DST/"
         log_ok "  ${dir}/ copiado com sucesso."
     else
         log_warn "  Pasta '${dir}' não encontrada em glpi-old (ignorando)."
     fi
 done
 
-# ─── PASSO 6: Ajustar permissões (conforme documentação do GLPI) ──────────────
-log_info "Passo 6/7 - Ajustando permissões de '${GLPI_DIR}'..."
+# ─── PASSO 7: Ajustar permissões (conforme documentação do GLPI) ──────────────
+log_info "Passo 7/8 - Ajustando permissões de '${GLPI_DIR}'..."
 
 # -----------------------------------------------------------------
 # Regra geral: o código-fonte pertence ao root e é somente-leitura
@@ -234,35 +258,49 @@ chmod 755 "${GLPI_DIR}/bin/console" 2>/dev/null || true
 
 log_ok "Permissões ajustadas conforme documentação GLPI."
 
-# ─── PASSO 7: Executar migração do banco de dados via console PHP ─────────────
-log_info "Passo 7/7 - Executando migração/atualização do banco de dados via PHP console..."
+# ─── PASSO 8: Executar migração do banco de dados via console PHP ─────────────
+log_info "Passo 8/8 - Executando migração/atualização do banco de dados via PHP console..."
 echo ""
 
-php "${GLPI_DIR}/bin/console" db:update --no-interaction
-
-echo ""
-log_ok "Migração do banco de dados concluída."
+if php "${GLPI_DIR}/bin/console" db:update --no-interaction; then
+    echo ""
+    log_ok "Migração do banco de dados concluída."
+else
+    echo ""
+    log_error "Erro na migração do banco de dados (db:update falhou)!"
+    log_warn "O GLPI permanecerá em modo de manutenção."
+    log_warn "Verifique o log de erros. O backup do banco de dados foi salvo em /root/"
+    exit 1
+fi
 
 # ─── Limpeza do cache ─────────────────────────────────────────────────────────
 log_info "Limpando cache do GLPI..."
 php "${GLPI_DIR}/bin/console" cache:clear --no-interaction 2>/dev/null || true
 log_ok "Cache limpo."
 
-# ─── Aquecimento do cache (warm-up via Redis) ─────────────────────────────────
-log_info "Aquecendo cache no Redis (cache warm-up)..."
+# ─── Aquecimento do cache (warm-up interno) ───────────────────────────────────
+log_info "Aquecendo cache interno do GLPI..."
 
-# Reconfigura o driver de cache (garante que o Redis seja usado)
-php "${GLPI_DIR}/bin/console" cache:configure --no-interaction 2>/dev/null || true
-
-# Dispara o carregamento das principais rotinas PHP para popular o Redis
+# Dispara o carregamento das principais rotinas PHP para popular o cache
 php "${GLPI_DIR}/bin/console" glpi:system:check_requirements --no-interaction 2>/dev/null || true
 
 log_ok "Cache aquecido com sucesso."
+
+# ─── Atualizar Plugins ────────────────────────────────────────────────────────
+log_info "Atualizando e ativando plugins via console..."
+php "${GLPI_DIR}/bin/console" plugin:install --all 2>/dev/null || true
+php "${GLPI_DIR}/bin/console" plugin:activate --all 2>/dev/null || true
+log_ok "Plugins verificados."
 
 # ─── Desativar modo de manutenção ─────────────────────────────────────────────
 log_info "Desativando modo de manutenção..."
 php "${GLPI_DIR}/bin/console" glpi:maintenance:disable 2>/dev/null || true
 log_ok "Modo de manutenção desativado."
+
+# ─── Reiniciar Serviços Web ───────────────────────────────────────────────────
+log_info "Reiniciando serviços web (httpd, php-fpm) para limpar OPcache..."
+systemctl restart httpd php-fpm 2>/dev/null || true
+log_ok "Serviços reiniciados."
 
 # ─── Limpeza de temporários ───────────────────────────────────────────────────
 log_info "Removendo arquivos temporários..."

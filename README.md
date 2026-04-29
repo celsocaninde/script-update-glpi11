@@ -2,7 +2,7 @@
 
 <img src="./banner.png" width="860" alt="GLPI 11 Auto Update Script Banner"/>
 
-# 🚀 GLPI 11 — Auto Update Script
+# 🚀 GLPI 11 — Enterprise Auto Update Script
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Shell Script](https://img.shields.io/badge/Shell-Bash-green?style=for-the-badge&logo=gnubash&logoColor=white)](glpi-update.sh)
@@ -10,162 +10,160 @@
 [![GLPI](https://img.shields.io/badge/GLPI-11.x-FF6B35?style=for-the-badge)](https://glpi-project.org)
 [![GitHub](https://img.shields.io/badge/GitHub-Releases-181717?style=for-the-badge&logo=github)](https://github.com/glpi-project/glpi/releases)
 
-> **Script bash inteligente que detecta, baixa e aplica automaticamente a última versão estável do GLPI 11.x — com backup seguro, permissões corretas e migração de banco de dados.**
+> **The ultimate smart bash script that detects, downloads, and safely applies the latest stable GLPI 11.x version — featuring automatic database backups, secure permissions, and robust error handling.**
+
+[ 🇧🇷 Ler em Português ](#-português-br) &nbsp;&nbsp;|&nbsp;&nbsp; [ 🇺🇸 Read in English ](#-english-us)
 
 ---
 
 </div>
 
-## ✨ Funcionalidades
+## 🇧🇷 Português (BR)
 
-| # | O que faz | Detalhe |
-|---|-----------|---------|
-| 🔒 | **Modo de manutenção** | Ativa antes de qualquer alteração via `php console` |
-| 📦 | **Backup automático** | Renomeia `glpi/` → `glpi-old/` antes de qualquer mudança |
-| 🌐 | **Detecção automática** | Consulta a API do GitHub e pega a última versão **11.x estável** |
-| ⬇️ | **Download inteligente** | Baixa apenas o `.tgz` oficial, sem Source Code archives |
-| 📁 | **Preserva seus dados** | Copia `files/`, `config/`, `plugins/` e `marketplace/` do backup |
-| 🔐 | **Permissões corretas** | Segue a **documentação oficial do GLPI** (root para código, apache para dados) |
-| 🗄️ | **Migração do banco** | Executa `php bin/console db:update` automaticamente |
-| 🧹 | **Limpeza e finalização** | Limpa cache, desativa manutenção e remove arquivos temporários |
+O script definitivo para manter o seu GLPI 11 atualizado sem dor de cabeça, focado em segurança de ambiente Enterprise.
+
+### ✨ Funcionalidades
+
+| Ícone | Recurso | Detalhe |
+|:---:|-----------|---------|
+| 📝 | **Logs de Execução** | Salva o histórico completo da atualização em `/var/log/glpi-update-*.log`. |
+| 🔒 | **Modo de Manutenção** | Ativa automaticamente antes do backup, garantindo a integridade dos dados. |
+| 🗄️ | **Backup do Banco (Novo)** | Extrai credenciais do `config_db.php` e gera um `.sql` em `/root/` de forma autônoma. |
+| 📦 | **Backup de Arquivos** | Renomeia `glpi/` para `glpi-old/` isolando a versão antiga. |
+| 🌐 | **Smart Download** | Consulta a API do GitHub para a última versão **11.x estável**. |
+| 📁 | **Restauração Inteligente** | Utiliza `rsync` (com barra de progresso) para voltar `files/`, `config/`, `plugins/` e `marketplace/`. |
+| 🔐 | **Permissões Nativas** | Segue a documentação oficial (código em root, arquivos em apache). |
+| 🛡️ | **Fail-Safe db:update** | Aborta a atualização se o banco falhar, evitando corromper a aplicação. |
+| 🧩 | **Gestão de Plugins** | Tenta verificar e reativar plugins automaticamente pós-atualização. |
+| 🔄 | **Flush de OPcache** | Reinicia `httpd` e `php-fpm` para evitar "telas em branco" ao finalizar. |
 
 ---
 
-## 📋 Pré-requisitos
+### 📋 Pré-requisitos
 
-**Sistema:** AlmaLinux 10.1 (ou qualquer RHEL-based)
+**Sistema:** AlmaLinux 10.1 (ou base RHEL/CentOS) com GLPI 10 ou 11 instalado.
 
 ```bash
-# Instale as dependências necessárias
-sudo dnf install jq rsync curl tar -y
+# Instale as dependências essenciais
+sudo dnf install jq rsync curl tar mariadb-server -y
 ```
 
-| Dependência | Obrigatório | Função |
-|-------------|:-----------:|--------|
-| `curl` | ✅ | Download do arquivo e consulta à API do GitHub |
-| `tar` | ✅ | Descompactação do GLPI |
-| `php` | ✅ | Execução do console GLPI |
-| `rsync` | ✅ | Cópia das pastas preservadas |
-| `jq` | ⚠️ | Parse do JSON da API *(fallback: `python3`)* |
+*(O `mysqldump` é obrigatório para o backup autônomo do banco de dados).*
 
 ---
 
-## 🚀 Como usar
+### 🚀 Como usar
 
-### 1. Baixe o script
-
+#### 1. Baixe o script
 ```bash
 curl -O https://raw.githubusercontent.com/celsocaninde/script-update-glpi11/main/glpi-update.sh
 ```
 
-### 2. Execute como root
-
+#### 2. Execute como root
 ```bash
 sudo bash glpi-update.sh
 ```
-
-**Só isso.** O script detecta, baixa e instala a última versão 11.x automaticamente.
+Pronto. Assista ao progresso na tela e tome um café ☕.
 
 ---
 
-## 🔄 Fluxo de execução
+### 🔄 Fluxo de Execução (O que acontece por baixo dos panos?)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  GLPI UPDATE SCRIPT - FLUXO                 │
-└─────────────────────────────────────────────────────────────┘
-
-  [1] Ativa modo de manutenção
-       └─► php bin/console glpi:maintenance:enable
-
-  [2] Backup da instalação atual
-       └─► /var/www/html/glpi  ──►  /var/www/html/glpi-old
-
-  [3] Detecta última versão 11.x
-       └─► API: api.github.com/repos/glpi-project/glpi/releases
-                  ↓
-              filtra: tag começa com "11.", não é prerelease
-                  ↓
-              ex: 11.0.7
-
-  [4] Download + Descompactação
-       └─► glpi-11.0.7.tgz  ──►  /var/www/html/glpi/
-
-  [5] Restauração dos dados pessoais
-       └─► glpi-old/files/        ──►  glpi/files/
-           glpi-old/config/       ──►  glpi/config/
-           glpi-old/plugins/      ──►  glpi/plugins/
-           glpi-old/marketplace/  ──►  glpi/marketplace/
-
-  [6] Permissões (padrão GLPI Docs)
-       └─► Código-fonte: root:root  |  644 / 755
-           Dados:        apache:apache  |  640 / 750
-
-  [7] Migração do banco de dados
-       └─► php bin/console db:update --no-interaction
-
-  [8] Finalização
-       └─► cache:clear  →  maintenance:disable  →  rm /tmp/glpi-update
+```mermaid
+graph TD;
+    A[Início do Script] -->|Verificações| B(1. Modo de Manutenção);
+    B --> C(2. Backup do Banco - mysqldump);
+    C --> D(3. Backup dos Arquivos - glpi-old);
+    D --> E(4. Download Último GLPI 11.x);
+    E --> F(5. Descompactação Web Root);
+    F --> G(6. Rsync Dados Pessoais);
+    G --> H(7. Ajuste de Permissões);
+    H --> I(8. Atualização do DB via PHP);
+    I -->|Sucesso| J(Aquecimento de Cache);
+    I -->|Erro| K[Falha! Mantém Manutenção];
+    J --> L(Atualização de Plugins);
+    L --> M(Remove Manutenção);
+    M --> N(Restart Apache/PHP-FPM);
+    N --> O((Sucesso! 🎉));
 ```
 
 ---
 
-## 🔐 Política de Permissões
+<br><br>
 
-> Segue rigorosamente a [documentação oficial do GLPI](https://glpi-install.readthedocs.io/en/latest/install/index.html).
+## 🇺🇸 English (US)
+
+The ultimate script to keep your GLPI 11 up to date painlessly, with a strong focus on Enterprise environment security.
+
+### ✨ Features
+
+| Icon | Feature | Detail |
+|:---:|-----------|---------|
+| 📝 | **Execution Logs** | Saves the complete update history in `/var/log/glpi-update-*.log`. |
+| 🔒 | **Maintenance Mode** | Activates automatically before backup, ensuring zero data inconsistency. |
+| 🗄️ | **Auto DB Backup (New)** | Extracts credentials from `config_db.php` and dumps a `.sql` in `/root/`. |
+| 📦 | **File Backup** | Renames `glpi/` to `glpi-old/` isolating the old version. |
+| 🌐 | **Smart Download** | Queries GitHub API for the latest **11.x stable** release. |
+| 📁 | **Smart Restore** | Uses `rsync` (with progress bar) to inject `files/`, `config/`, `plugins/` back. |
+| 🔐 | **Native Permissions** | Follows official docs (source code as root, files as apache). |
+| 🛡️ | **Fail-Safe db:update** | Aborts update if the database migration fails, preventing app corruption. |
+| 🧩 | **Plugin Management** | Attempts to verify and reactivate plugins automatically after updating. |
+| 🔄 | **OPcache Flush** | Restarts `httpd` and `php-fpm` to prevent "blank screens" upon finishing. |
+
+---
+
+### 📋 Prerequisites
+
+**System:** AlmaLinux 10.1 (or RHEL/CentOS base) running GLPI 10 or 11.
 
 ```bash
-# Código-fonte → somente leitura pelo Apache
-chown root:root  /var/www/html/glpi
-chmod 755 (dirs) / 644 (files)
-
-# Pastas de dados → Apache pode escrever
-chown apache:apache  files/  config/  plugins/  marketplace/  public/
-chmod 750 (dirs) / 640 (files)
+# Install essential dependencies
+sudo dnf install jq rsync curl tar mariadb-server -y
 ```
+
+*(Note: `mysqldump` is mandatory for the autonomous database backup).*
 
 ---
 
-## 🛡️ Segurança & Recuperação
+### 🚀 How to use
 
-### ⚠️ Se algo der errado
-
+#### 1. Download the script
 ```bash
-# Reverter manualmente para a versão anterior
+curl -O https://raw.githubusercontent.com/celsocaninde/script-update-glpi11/main/glpi-update.sh
+```
+
+#### 2. Run as root
+```bash
+sudo bash glpi-update.sh
+```
+That's it. Watch the progress bar and grab a coffee ☕.
+
+---
+
+### 🛡️ Security & Recovery / Segurança e Recuperação
+
+If something goes terribly wrong, here is how you can revert manually. 
+
+**Database:**
+```bash
+mysql -u root -p glpi_db < /root/glpi-db-backup-202X...sql
+```
+
+**Files:**
+```bash
 sudo mv /var/www/html/glpi      /var/www/html/glpi-failed
 sudo mv /var/www/html/glpi-old  /var/www/html/glpi
 ```
 
-### 🗑️ Após validar a atualização
-
+**Clean up (when successful):**
 ```bash
-# Remover o backup quando tiver certeza que está tudo ok
 sudo rm -rf /var/www/html/glpi-old
 ```
 
 ---
 
-## 📂 Estrutura do repositório
-
-```
-script-update-glpi11/
-│
-├── glpi-update.sh    ← Script principal de atualização
-└── README.md         ← Este arquivo
-```
-
----
-
-## 🌐 Links úteis
-
-- 📖 [Documentação oficial GLPI](https://glpi-install.readthedocs.io)
-- 🐙 [Releases do GLPI no GitHub](https://github.com/glpi-project/glpi/releases)
-- 🐛 [Reportar problemas neste script](https://github.com/celsocaninde/script-update-glpi11/issues)
-
----
-
 <div align="center">
 
-Feito com ❤️ para a comunidade GLPI 🇧🇷
+**Feito com ❤️ para a comunidade GLPI** / **Made with ❤️ for the GLPI Community**
 
 </div>
