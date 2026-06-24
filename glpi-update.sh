@@ -53,7 +53,7 @@ check_root() {
 
 check_dependencies() {
     log_info "Verificando dependências..."
-    local deps=("curl" "tar" "php" "rsync" "mysqldump")
+    local deps=("curl" "tar" "php" "rsync")
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
             log_error "Dependência não encontrada: $dep. Instale e tente novamente."
@@ -141,28 +141,8 @@ else
     log_warn "Não foi possível ativar o modo de manutenção (ignorando)."
 fi
 
-# ─── PASSO 2: Backup do Banco de Dados ────────────────────────────────────────
-log_info "Passo 2/8 - Realizando backup do banco de dados..."
-if [[ -f "${GLPI_DIR}/config/config_db.php" ]]; then
-    DB_USER=$(grep "public \$dbuser" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
-    DB_PASS=$(grep "public \$dbpassword" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
-    DB_NAME=$(grep "public \$dbdefault" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
-    DB_HOST=$(grep "public \$dbhost" "${GLPI_DIR}/config/config_db.php" | awk -F"'" '{print $2}')
-    
-    BACKUP_FILE="/root/glpi-db-backup-$(date +%Y%m%d_%H%M%S).sql"
-    # O 2>/dev/null previne que avisos sobre senha na linha de comando poluam o log
-    if mysqldump -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" > "$BACKUP_FILE" 2>/dev/null; then
-        log_ok "Backup do banco salvo em: $BACKUP_FILE"
-    else
-        log_error "Falha ao realizar o backup do banco de dados!"
-        exit 1
-    fi
-else
-    log_warn "Arquivo de configuração do banco não encontrado. Pulando backup do DB."
-fi
-
-# ─── PASSO 3: Renomear pasta glpi para glpi-old ───────────────────────────────
-log_info "Passo 3/8 - Renomeando '${GLPI_DIR}' para '${GLPI_OLD_DIR}'..."
+# ─── PASSO 2: Renomear pasta glpi para glpi-old ──────────────────────────────
+log_info "Passo 2/8 - Renomeando '${GLPI_DIR}' para '${GLPI_OLD_DIR}'..."
 
 if [[ -d "$GLPI_OLD_DIR" ]]; then
     log_warn "Diretório '${GLPI_OLD_DIR}' já existe. Removendo backup antigo..."
@@ -172,8 +152,8 @@ fi
 mv "$GLPI_DIR" "$GLPI_OLD_DIR"
 log_ok "Renomeado com sucesso."
 
-# ─── PASSO 4: Baixar nova versão do GLPI ──────────────────────────────────────
-log_info "Passo 4/8 - Baixando nova versão do GLPI..."
+# ─── PASSO 3: Baixar nova versão do GLPI ──────────────────────────────────────
+log_info "Passo 3/8 - Baixando nova versão do GLPI..."
 mkdir -p "$TMP_DIR"
 
 TGZ_FILE="${TMP_DIR}/glpi-new.tgz"
@@ -188,8 +168,8 @@ fi
 
 log_ok "Download concluído: ${TGZ_FILE}"
 
-# ─── PASSO 5: Descompactar no diretório web ───────────────────────────────────
-log_info "Passo 5/8 - Descompactando GLPI em '${WEB_ROOT}'..."
+# ─── PASSO 4: Descompactar no diretório web ───────────────────────────────────
+log_info "Passo 4/8 - Descompactando GLPI em '${WEB_ROOT}'..."
 tar -xzf "$TGZ_FILE" -C "$WEB_ROOT"
 
 # O tarball do GLPI extrai para uma pasta chamada 'glpi'
@@ -201,8 +181,8 @@ fi
 
 log_ok "Descompactado em: ${GLPI_DIR}"
 
-# ─── PASSO 6: Copiar pastas preservadas do glpi-old ──────────────────────────
-log_info "Passo 6/8 - Copiando pastas preservadas de '${GLPI_OLD_DIR}'..."
+# ─── PASSO 5: Copiar pastas preservadas do glpi-old ──────────────────────────
+log_info "Passo 5/8 - Copiando pastas preservadas de '${GLPI_OLD_DIR}'..."
 
 for dir in "${PRESERVE_DIRS[@]}"; do
     SRC="${GLPI_OLD_DIR}/${dir}"
@@ -217,6 +197,17 @@ for dir in "${PRESERVE_DIRS[@]}"; do
         log_warn "  Pasta '${dir}' não encontrada em glpi-old (ignorando)."
     fi
 done
+
+# ─── PASSO 6: Remover configuração de cache Redis ─────────────────────────────
+log_info "Passo 6/8 - Verificando e removendo configuração de cache Redis..."
+
+CACHE_CONFIG="${GLPI_DIR}/config/cache.php"
+if [[ -f "$CACHE_CONFIG" ]]; then
+    rm -f "$CACHE_CONFIG"
+    log_ok "Arquivo '${CACHE_CONFIG}' removido. GLPI usará o cache padrão (filesystem)."
+else
+    log_info "Nenhuma configuração de cache personalizada encontrada em config/cache.php."
+fi
 
 # ─── PASSO 7: Ajustar permissões (conforme documentação do GLPI) ──────────────
 log_info "Passo 7/8 - Ajustando permissões de '${GLPI_DIR}'..."
@@ -234,13 +225,11 @@ find "$GLPI_DIR" -type f -exec chmod 644 {} \;
 
 # 2. Pastas de dados que o apache PRECISA escrever:
 #    files/, config/, plugins/, marketplace/
-#    public/ (necessário para assets em GLPI >= 10)
 WRITABLE_DIRS=(
     "files"
     "config"
     "plugins"
     "marketplace"
-    "public"
 )
 for wdir in "${WRITABLE_DIRS[@]}"; do
     WPATH="${GLPI_DIR}/${wdir}"
@@ -258,6 +247,21 @@ chmod 755 "${GLPI_DIR}/bin/console" 2>/dev/null || true
 
 log_ok "Permissões ajustadas conforme documentação GLPI."
 
+# SELinux: AlmaLinux tem SELinux habilitado por padrão
+if command -v restorecon &>/dev/null; then
+    log_info "  Restaurando contextos SELinux em '${GLPI_DIR}'..."
+    restorecon -Rv "$GLPI_DIR" &>/dev/null || true
+    for wdir in "${WRITABLE_DIRS[@]}"; do
+        WPATH="${GLPI_DIR}/${wdir}"
+        if [[ -d "$WPATH" ]]; then
+            chcon -Rt httpd_sys_rw_content_t "$WPATH" 2>/dev/null || true
+        fi
+    done
+    log_ok "  Contextos SELinux ajustados (httpd_sys_rw_content_t para pastas de dados)."
+else
+    log_warn "  'restorecon' não encontrado — SELinux pode bloquear o GLPI se estiver ativo."
+fi
+
 # ─── PASSO 8: Executar migração do banco de dados via console PHP ─────────────
 log_info "Passo 8/8 - Executando migração/atualização do banco de dados via PHP console..."
 echo ""
@@ -269,19 +273,34 @@ else
     echo ""
     log_error "Erro na migração do banco de dados (db:update falhou)!"
     log_warn "O GLPI permanecerá em modo de manutenção."
-    log_warn "Verifique o log de erros. O backup do banco de dados foi salvo em /root/"
+    log_warn "Verifique o log de erros em: ${LOG_FILE}"
     exit 1
 fi
 
 # ─── Limpeza do cache ─────────────────────────────────────────────────────────
 log_info "Limpando cache do GLPI..."
+
+# 1. Limpa via console PHP (cache de objetos/sessão)
 php "${GLPI_DIR}/bin/console" cache:clear --no-interaction 2>/dev/null || true
+
+# 2. Remove fisicamente os arquivos de cache do filesystem e recria com permissões corretas
+for cache_subdir in _cache _tmp; do
+    CACHE_PATH="${GLPI_DIR}/files/${cache_subdir}"
+    if [[ -d "$CACHE_PATH" ]]; then
+        find "$CACHE_PATH" -mindepth 1 -delete 2>/dev/null || true
+        log_info "  Cache físico removido: files/${cache_subdir}/"
+    fi
+    mkdir -p "$CACHE_PATH"
+    chown -R "${WEB_USER}:${WEB_GROUP}" "$CACHE_PATH"
+    chmod 750 "$CACHE_PATH"
+    chcon -t httpd_sys_rw_content_t "$CACHE_PATH" 2>/dev/null || true
+done
+
 log_ok "Cache limpo."
 
 # ─── Aquecimento do cache (warm-up interno) ───────────────────────────────────
 log_info "Aquecendo cache interno do GLPI..."
 
-# Dispara o carregamento das principais rotinas PHP para popular o cache
 php "${GLPI_DIR}/bin/console" glpi:system:check_requirements --no-interaction 2>/dev/null || true
 
 log_ok "Cache aquecido com sucesso."
